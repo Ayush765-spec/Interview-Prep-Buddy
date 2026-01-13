@@ -36,7 +36,9 @@ const questions = [
   }
 ];
 
+// ==========================================
 // State
+// ==========================================
 let currentQuestionIndex = 0;
 let isRecording = false;
 let mediaRecorder = null;
@@ -44,9 +46,14 @@ let audioChunks = [];
 let timerInterval = null;
 let seconds = 0;
 let recognition = null;
-let transcript = "";
 
+// 🔥 FIXED STATE
+let transcripts = {};     // { questionId: "answer" }
+let transcript = "";      // current question transcript only
+
+// ==========================================
 // Initialize
+// ==========================================
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   updateQuestion();
@@ -71,45 +78,22 @@ function toggleTheme() {
 }
 
 function updateThemeIcon(theme) {
-  const themeToggle = document.querySelector('.theme-toggle');
-  themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
-}
-
-// ==========================================
-// Mobile Menu
-// ==========================================
-function toggleMobileMenu() {
-  const mobileMenu = document.getElementById('mobileMenu');
-  mobileMenu.classList.toggle('active');
+  document.querySelector('.theme-toggle').textContent =
+    theme === 'dark' ? '☀️' : '🌙';
 }
 
 // ==========================================
 // Page Navigation
 // ==========================================
 function showPage(pageName) {
-  // Hide all pages
-  document.querySelectorAll('.page').forEach(page => {
-    page.classList.remove('active');
-  });
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(`page-${pageName}`)?.classList.add('active');
 
-  // Show selected page
-  const targetPage = document.getElementById(`page-${pageName}`);
-  if (targetPage) {
-    targetPage.classList.add('active');
-  }
-
-  // Update nav links
   document.querySelectorAll('.nav-link').forEach(link => {
-    link.classList.remove('active');
-    if (link.dataset.page === pageName) {
-      link.classList.add('active');
-    }
+    link.classList.toggle('active', link.dataset.page === pageName);
   });
 
-  // Close mobile menu
-  document.getElementById('mobileMenu').classList.remove('active');
-
-  // Scroll to top
+  document.getElementById('mobileMenu')?.classList.remove('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -118,26 +102,31 @@ function showPage(pageName) {
 // ==========================================
 function updateQuestion() {
   const question = questions[currentQuestionIndex];
-  
+
   document.getElementById('currentQuestion').textContent = currentQuestionIndex + 1;
   document.getElementById('totalQuestions').textContent = questions.length;
   document.getElementById('questionCategory').textContent = question.category;
   document.getElementById('questionText').textContent = question.question;
   document.getElementById('questionTip').innerHTML = `💡 Tip: ${question.tip}`;
-  
-  // Update progress bar
+
   const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
   document.getElementById('progressFill').style.width = `${progress}%`;
-  
-  // Update buttons
+
   document.getElementById('prevBtn').disabled = currentQuestionIndex === 0;
-  
-  const isLastQuestion = currentQuestionIndex === questions.length - 1;
-  document.getElementById('nextBtn').style.display = isLastQuestion ? 'none' : 'inline-flex';
-  document.getElementById('submitBtn').style.display = isLastQuestion ? 'inline-flex' : 'none';
-  
-  // Reset recorder
-  resetRecorder();
+
+  const isLast = currentQuestionIndex === questions.length - 1;
+  document.getElementById('nextBtn').style.display = isLast ? 'none' : 'inline-flex';
+  document.getElementById('submitBtn').style.display = isLast ? 'inline-flex' : 'none';
+
+  // 🔥 LOAD SAVED TRANSCRIPT
+  const qId = question.id;
+  transcript = transcripts[qId] || "";
+  updateTranscript();
+
+  document.getElementById('transcriptSection').style.display =
+    transcript ? 'block' : 'none';
+
+  resetRecorderUI();
 }
 
 function nextQuestion() {
@@ -155,215 +144,131 @@ function prevQuestion() {
 }
 
 // ==========================================
-// Voice Recording
+// Speech Recognition
 // ==========================================
 function initSpeechRecognition() {
-  // TODO: Implement proper speech recognition with Whisper API
-  // For now, using Web Speech API as fallback
   if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new SpeechRecognition();
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SR();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
-    
+
     recognition.onresult = (event) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-      
+      let finalText = '';
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) {
-          finalTranscript += result[0].transcript + ' ';
-        } else {
-          interimTranscript += result[0].transcript;
+        if (event.results[i].isFinal) {
+          finalText += event.results[i][0].transcript + ' ';
         }
       }
-      
-      transcript = finalTranscript || interimTranscript;
+
+      transcript += finalText;
       updateTranscript();
     };
-    
-    recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
-      showToast('Speech recognition error. Please try again.', 'error');
-      stopRecording();
-    };
+
+    recognition.onerror = () => stopRecording();
   }
 }
 
+// ==========================================
+// Recording
+// ==========================================
 function toggleRecording() {
-  if (isRecording) {
-    stopRecording();
-  } else {
-    startRecording();
-  }
+  isRecording ? stopRecording() : startRecording();
 }
 
 async function startRecording() {
   try {
-    // Request microphone permission
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    
+
     isRecording = true;
-    transcript = "";
+    transcript = transcripts[questions[currentQuestionIndex].id] || "";
     seconds = 0;
-    
-    // Update UI
-    const recordBtn = document.getElementById('recordBtn');
-    recordBtn.classList.add('recording');
-    document.getElementById('recordIcon').textContent = '⏹';
-    document.getElementById('recordText').textContent = 'Stop Recording';
-    
-    document.querySelector('.status-icon').textContent = '🔴';
-    document.querySelector('.status-text').textContent = 'Recording...';
-    
-    // Start timer
+
+    updateRecordingUI(true);
     timerInterval = setInterval(updateTimer, 1000);
-    
-    // Start speech recognition
-    if (recognition) {
-      recognition.start();
-    }
-    
-    // Start media recorder for audio file (optional)
+
+    recognition?.start();
+
     mediaRecorder = new MediaRecorder(stream);
     audioChunks = [];
-    
-    mediaRecorder.ondataavailable = (event) => {
-      audioChunks.push(event.data);
-    };
-    
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
     mediaRecorder.start();
-    
-    showToast('Recording started!', 'success');
-    
-  } catch (error) {
-    console.error('Error accessing microphone:', error);
-    showToast('Could not access microphone. Please allow microphone permissions.', 'error');
+
+  } catch {
+    showToast('Microphone access denied', 'error');
   }
 }
 
 function stopRecording() {
+  if (!isRecording) return;
+
   isRecording = false;
-  
-  // Update UI
-  const recordBtn = document.getElementById('recordBtn');
-  recordBtn.classList.remove('recording');
-  document.getElementById('recordIcon').textContent = '⏺';
-  document.getElementById('recordText').textContent = 'Start Recording';
-  
-  document.querySelector('.status-icon').textContent = '✅';
-  document.querySelector('.status-text').textContent = 'Recording complete';
-  
-  // Stop timer
   clearInterval(timerInterval);
-  
-  // Stop speech recognition
-  if (recognition) {
-    recognition.stop();
-  }
-  
-  // Stop media recorder
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+  recognition?.stop();
+
+  if (mediaRecorder?.state !== 'inactive') {
     mediaRecorder.stop();
-    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
   }
-  
-  // Show transcript section if we have content
+
+  // 🔥 SAVE TRANSCRIPT
+  const qId = questions[currentQuestionIndex].id;
+  transcripts[qId] = transcript;
+
+  updateRecordingUI(false);
+
   if (transcript.trim()) {
     document.getElementById('transcriptSection').style.display = 'block';
-    updateTranscript();
   }
-  
+
   showToast('Recording saved!', 'success');
 }
 
-function resetRecorder() {
-  isRecording = false;
-  seconds = 0;
-  transcript = "";
+// ==========================================
+// UI Helpers
+// ==========================================
+function updateRecordingUI(isOn) {
+  document.getElementById('recordIcon').textContent = isOn ? '⏹' : '⏺';
+  document.getElementById('recordText').textContent =
+    isOn ? 'Stop Recording' : 'Start Recording';
+  document.querySelector('.status-icon').textContent = isOn ? '🔴' : '🎤';
+  document.querySelector('.status-text').textContent =
+    isOn ? 'Recording...' : 'Ready to record';
+}
+
+function resetRecorderUI() {
   clearInterval(timerInterval);
-  
+  seconds = 0;
   document.getElementById('timer').textContent = '00:00';
-  document.getElementById('recordIcon').textContent = '⏺';
-  document.getElementById('recordText').textContent = 'Start Recording';
-  document.querySelector('.status-icon').textContent = '🎤';
-  document.querySelector('.status-text').textContent = 'Ready to record';
-  document.getElementById('transcriptSection').style.display = 'none';
-  
-  const recordBtn = document.getElementById('recordBtn');
-  recordBtn.classList.remove('recording');
+  updateRecordingUI(false);
 }
 
 function updateTimer() {
   seconds++;
-  const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const secs = (seconds % 60).toString().padStart(2, '0');
-  document.getElementById('timer').textContent = `${mins}:${secs}`;
+  const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const s = String(seconds % 60).padStart(2, '0');
+  document.getElementById('timer').textContent = `${m}:${s}`;
 }
 
 function updateTranscript() {
-  const transcriptText = document.getElementById('transcriptText');
-  transcriptText.textContent = transcript || 'Your transcribed text will appear here...';
+  document.getElementById('transcriptText').textContent =
+    transcript || 'Your transcribed text will appear here...';
 }
 
 function copyTranscript() {
-  if (transcript) {
-    navigator.clipboard.writeText(transcript).then(() => {
-      showToast('Transcript copied to clipboard!', 'success');
-    }).catch(() => {
-      showToast('Failed to copy transcript.', 'error');
-    });
-  }
+  navigator.clipboard.writeText(transcript);
+  showToast('Copied!', 'success');
 }
 
 // ==========================================
-// Toast Notifications
+// Toast
 // ==========================================
-function showToast(message, type = 'success') {
-  const container = document.getElementById('toastContainer');
+function showToast(msg, type = 'success') {
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  toast.textContent = message;
-  
-  container.appendChild(toast);
-  
-  // Auto remove after 3 seconds
-  setTimeout(() => {
-    toast.remove();
-  }, 3000);
-}
-
-// ==========================================
-// TODO: Backend API Integration
-// ==========================================
-// TODO: Implement connection to FastAPI backend
-// API endpoints to implement:
-// - POST /api/transcribe - Send audio for Whisper transcription
-// - POST /api/analyze - Send transcript for NLP analysis
-// - GET /api/questions - Fetch interview questions from database
-// - POST /api/feedback - Store user feedback and responses
-
-async function sendToBackend(audioBlob) {
-  // TODO: Implement API call to backend
-  // const formData = new FormData();
-  // formData.append('audio', audioBlob);
-  // const response = await fetch('/api/transcribe', {
-  //   method: 'POST',
-  //   body: formData
-  // });
-  // return response.json();
-  console.log('TODO: Send audio to backend for processing');
-}
-
-async function getAIFeedback(transcript) {
-  // TODO: Implement API call to get AI feedback
-  // const response = await fetch('/api/analyze', {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/json' },
-  //   body: JSON.stringify({ transcript })
-  // });
-  // return response.json();
-  console.log('TODO: Get AI feedback from backend');
+  toast.textContent = msg;
+  document.getElementById('toastContainer').appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
